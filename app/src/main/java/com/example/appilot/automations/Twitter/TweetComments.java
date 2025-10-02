@@ -7,15 +7,19 @@ import android.graphics.Path;
 import android.graphics.Rect;
 import android.os.Handler;
 import android.os.Looper;
+import android.util.DisplayMetrics;
 import android.util.Log;
 import android.os.Bundle;
 import android.view.accessibility.AccessibilityNodeInfo;
+import android.view.WindowManager;
+
 import com.example.appilot.automations.PopUpHandlers.Instagram.PopUpHandler;
 import com.example.appilot.services.MyAccessibilityService;
 import com.example.appilot.utils.HelperFunctions;
 import com.example.appilot.utils.OpenAIClient;
-
-import org.w3c.dom.Text;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -31,16 +35,24 @@ public class TweetComments {
     private HelperFunctions helperFunctions;
     private String Task_id = null;
     private String job_id = null;
+    private String openAPIKey;
+    private String commentType = "natural";
     private List<Object> AccountInputs;
     private int duration;
     private long startTime;
     private double commentProbability;
     private int processCount = 0;
-    private String openAPIKey;
     private OpenAIClient openAIClient;
     private String currentCommentText = null;
+    private int comment_limit;
+    private int commentCount = 0;
+    private int prompt = 1;
+    private String todaysDate;
+    private static final String PREFS_NAME = "TwitterBotPrefs";
+    private static final String PREF_COMMENT_COUNT = "commentCount";
+    private static final String PREF_DATE = "dateComments";
 
-    public TweetComments(MyAccessibilityService service, String taskid, String jobid, List<Object> AccountInputs, int duration, double commentProbability, String openAPIKey) {
+    public TweetComments(MyAccessibilityService service, String taskid, String jobid, List<Object> AccountInputs, int duration, double commentProbability, String openAPIKey, int comment_limit, String date) {
         this.context = service;
         this.service = service;
         this.Task_id = taskid;
@@ -55,33 +67,44 @@ public class TweetComments {
         this.startTime = System.currentTimeMillis();
         this.openAPIKey = openAPIKey;
         this.openAIClient = new OpenAIClient(openAPIKey);
+        this.comment_limit = comment_limit;
+        this.todaysDate = date;
+        // Load commentCount from SharedPreferences
+        commentCount = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).getInt(PREF_COMMENT_COUNT, 0);
     }
-
-    public void startScrolling() {
-        findAndClickComment();
-    }
-    public void findAndClickComment() {
-        Log.d(TAG, "Searching for Comments");
-        AccessibilityNodeInfo rootNode = service.getRootInActiveWindow();
-        if (rootNode == null) {
-            Log.e(TAG, "No root node available for comments");
-            helperFunctions.cleanupAndExit("Automation Could not be Completed, because no Root_node present", "error");
+    public void startCommentAutomation() {
+        Log.d(TAG, "Starting Comment Automation with duration: " + duration + " minutes and comment probability: " + commentProbability);
+        // Get stored date from SharedPreferences
+        String storedDate = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).getString(PREF_DATE, null);
+        if (storedDate == null) {
+            // First time: store today's date
+            commentCount = 0;
+            context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                    .edit()
+                    .putString(PREF_DATE, todaysDate)
+                    .apply();
+            Log.d(TAG, "First run: Storing today's date: " + todaysDate);
+        } else {
+            Log.d(TAG, "Loaded stored date: " + storedDate + ", Today's date: " + todaysDate);
+            if (!todaysDate.equals(storedDate)) {
+                // Date changed: reset likeCount and update stored date
+                commentCount = 0;
+                context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                        .edit()
+                        .putInt(PREF_COMMENT_COUNT, 0)
+                        .putString(PREF_DATE, todaysDate)
+                        .apply();
+                Log.d(TAG, "Date changed. Reset likeCount to 0 and updated stored date to: " + todaysDate);
+            }
+        }
+        if (commentCount >= comment_limit) {
+            Log.d(TAG, "Comment limit reached: " + commentCount + "/" + comment_limit);
+            handler.postDelayed(()->{
+                helperFunctions.cleanupAndExit("Comment limit reached: " + commentCount + "/" + comment_limit, "final");
+            }, 1000 + random.nextInt(3000));
             return;
         }
-        Log.d(TAG, "Root node available, proceeding with decision logic");
-
-        double randomValue = random.nextDouble();
-        Log.d(TAG,"Random Value: "+randomValue+", Comment probability: "+commentProbability);
-        if (randomValue < commentProbability) {
-            Log.d(TAG, "Clicking Like based on probability ("+(commentProbability*100)+ "%)");
-            findComments();
-        } else {
-            Log.d(TAG, "Moving to next tweet");
-            // Perform a scroll action to move to the next tweet
-            handler.postDelayed(this::onScroll, 1000 + random.nextInt(3000));
-        }
-        //findComments();
-        rootNode.recycle();
+        findComments();
     }
     private void findComments() {
         Log.d(TAG, "Starting hierarchy navigation to click target element...");
@@ -92,88 +115,54 @@ public class TweetComments {
             return;
         }
         // Find parent node by resource ID
-        String parentNodeId = "com.twitter.android:id/row";
+        String parentNodeId = "android:id/list";
         AccessibilityNodeInfo parentNode = HelperFunctions.findNodeByResourceId(rootNode, parentNodeId);
-
         if (parentNode != null) {
             Log.d(TAG, "Found parent node with ID: " + parentNodeId);
-            Log.d(TAG, "Parent has " + parentNode.getChildCount() + " children");
-            // Navigate to target: Parent -> Child(0) -> Child(0)
-            AccessibilityNodeInfo targetElement = navigateToImageContainer(parentNode);
-            if (targetElement != null) {
-                Log.d(TAG, "Found target element, attempting click...");
-                boolean clickSuccess = performClick(targetElement);
-                if (clickSuccess) {
-                    Log.d(TAG, "Image Container clicked successfully. Waiting for profile to load...");
-                    int randomDelay = 2000 + random.nextInt(5000);
-                    handler.postDelayed(()->{
-                        helperFunctions.performScroll(0.6f,0.3f);
-                        handler.postDelayed(this::findAndLikeComments, randomDelay);
-                    }, randomDelay);
+            // Find the first ViewGroup child under the parent node
+            AccessibilityNodeInfo viewGroupChild = null;
+            for (int i = 0; i < parentNode.getChildCount(); i++) {
+                AccessibilityNodeInfo child = parentNode.getChild(i);
+                if (child != null && "android.view.ViewGroup".contentEquals(child.getClassName())) {
+                    viewGroupChild = child;
+                    break;
                 }
+            }
+            if (viewGroupChild != null) {
+                Log.d(TAG, "Found ViewGroup child under parent node, attempting click...");
+                double randomValue = random.nextDouble();
+                Log.d(TAG, "Random Value: " + randomValue + ", Comment probability: " + commentProbability);
+                if (randomValue < commentProbability) {
+                    Log.d(TAG, "Clicking Tweet based on probability (" + (commentProbability * 100) + "%)");
+                    //findComments();
+                    boolean clickSuccess = performClick(viewGroupChild);
+                    if (clickSuccess) {
+                        Log.d(TAG, "Successfully clicked ViewGroup child, now navigating to comments...");
+                        handler.postDelayed(() -> {
+                            helperFunctions.performScroll(0.8f, 0.3f);
+                            handler.postDelayed(this::findAndLikeComments, 1000 + random.nextInt(3000));
+                        }, 1000 + random.nextInt(3000));
+                    }
+                } else {
+                    Log.d(TAG, "Moving to next tweet");
+                    // Perform a scroll action to move to the next tweet
+                    handler.postDelayed(this::onScroll, 1000 + random.nextInt(3000));
+                }
+                viewGroupChild.recycle();
             } else {
-                Log.e(TAG, "Could not navigate to target element");
-                helperFunctions.cleanupAndExit("Could not navigate to target element", "error");
+                Log.d(TAG, "No ViewGroup child found under parent node");
+                handler.postDelayed(() -> {
+                    helperFunctions.cleanupAndExit("No ViewGroup child found under parent node", "error");
+                }, 2000);
             }
             parentNode.recycle();
         } else {
             Log.e(TAG, "Could not find parent node with ID: " + parentNodeId);
-            helperFunctions.cleanupAndExit("Could not find parent node", "error");
+            handler.postDelayed(() -> {
+                helperFunctions.cleanupAndExit("Could not find parent node in findComments", "error");
+            }, 2000);
         }
         rootNode.recycle();
-    }
-    private AccessibilityNodeInfo navigateToImageContainer(AccessibilityNodeInfo parent) {
-        try {
-            Log.d(TAG, "Navigating: Parent -> Child(0) -> Child(0)");
-
-            if (parent == null) {
-                Log.e(TAG, "Parent node is null");
-                return null;
-            }
-            // Log parent details for debugging
-            Log.d(TAG, "Parent class: " + parent.getClassName());
-            Log.d(TAG, "Parent child count: " + parent.getChildCount());
-
-            // Step 1: Get first child (0)
-            if (parent.getChildCount() < 1) {
-                Log.e(TAG, "Parent has no children");
-                return null;
-            }
-            AccessibilityNodeInfo firstChild = parent.getChild(0);
-            if (firstChild == null) {
-                Log.e(TAG, "Could not get child(0)");
-                return null;
-            }
-            // Log target element details
-            Log.d(TAG, "Found Child(0) of Parent:");
-            Log.d(TAG, "Class: " + firstChild.getClassName());
-            Log.d(TAG, "Text: " + firstChild.getText());
-            Log.d(TAG, "Clickable: " + firstChild.isClickable());
-
-            // Step 2: Get first child (0) of firstChild
-            if (firstChild.getChildCount() < 1) {
-                Log.e(TAG, "Child(0) has no children");
-                return null;
-            }
-            AccessibilityNodeInfo targetElement = firstChild.getChild(0);
-            if (targetElement == null) {
-                Log.e(TAG, "Could not get child(0) of firstChild");
-                return null;
-            }
-            // Log target element details
-            Log.d(TAG, "Found Child(0) of Parent -> Child(0):");
-            Log.d(TAG, "Class: " + targetElement.getClassName());
-            Log.d(TAG, "Text: " + targetElement.getText());
-            Log.d(TAG, "Clickable: " + targetElement.isClickable());
-
-            Rect bounds = new Rect();
-            targetElement.getBoundsInScreen(bounds);
-            Log.d(TAG, "Bounds: " + bounds);
-            return targetElement;
-        } catch (Exception e) {
-            Log.e(TAG, "Error navigating to target: " + e.getMessage());
-            return null;
-        }
     }
     private void findAndLikeComments() {
         Log.d(TAG, "Starting to find and like comments...");
@@ -196,7 +185,7 @@ public class TweetComments {
                 processViewGroupsWithProbability(viewGroupChildren, 1);
             } else {
                 Log.d(TAG, "No ViewGroup children found");
-                helperFunctions.cleanupAndExit("No ViewGroup Childern are found for comments", "final");
+                helperFunctions.cleanupAndExit("No ViewGroup Children are found for comments", "final");
             }
             parentNode.recycle();
         } else {
@@ -255,8 +244,8 @@ public class TweetComments {
         if (currentIndex >= viewGroupChildren.size()) {
             Log.d(TAG, "All ViewGroups have been checked based on probability.");
             processCount++;
-            //int maxProcessCount = 1 + random.nextInt(3); // Randomly choose between 1 and 3
-            int maxProcessCount =1;
+            int maxProcessCount = 1 + random.nextInt(1); // Randomly choose between 1 and 3
+            //int maxProcessCount =1;
             if (processCount < maxProcessCount) {
                 int randomDelay = 2000 + random.nextInt(3000);
                 handler.postDelayed(()->{
@@ -436,11 +425,24 @@ public class TweetComments {
             boolean clickSuccess = performClick(replyButton);
             if (clickSuccess) {
                 Log.d(TAG, "Successfully clicked reply button");
-                // Wait for 2 seconds, then click back button
+                // Wait for 2 seconds, then check for compose_content node before typing
                 handler.postDelayed(() -> {
-                    Log.d(TAG, "Now going to type comment");
-                    //clickBackToFeedAndContinue(currentIndex, viewGroupChildren);
-                    typeCommentAndSubmit(currentIndex, viewGroupChildren);
+                    Log.d(TAG, "Now checking for compose_content node before typing comment");
+                    AccessibilityNodeInfo rootNode = service.getRootInActiveWindow();
+                    if (rootNode != null) {
+                        AccessibilityNodeInfo composeNode = findNodeByResourceIdInSubtree(rootNode, "com.twitter.android:id/compose_content");
+                        if (composeNode != null) {
+                            Log.d(TAG, "compose_content node found, jumping to Reply pop up");
+                            replyPopUp(composeNode, currentIndex, viewGroupChildren);
+                        } else {
+                            Log.d(TAG, "compose_content node not found, proceeding to type comment");
+                            typeCommentAndSubmit(currentIndex, viewGroupChildren);
+                        }
+                        rootNode.recycle();
+                    } else {
+                        Log.e(TAG, "No root node available when checking for compose_content, proceeding to type comment");
+                        typeCommentAndSubmit(currentIndex, viewGroupChildren);
+                    }
                 }, 2000);
             } else {
                 Log.e(TAG, "Failed to click reply button, continuing to next node");
@@ -460,6 +462,116 @@ public class TweetComments {
             }, randomDelay);
         }
     }
+    private void replyPopUp(AccessibilityNodeInfo composeNode, int currentIndex, List<AccessibilityNodeInfo> viewGroupChildren) {
+        if (composeNode != null) {
+            Log.d(TAG, "Found parent node with ID: " + composeNode);
+            Log.d(TAG, "Parent has " + composeNode.getChildCount() + " children");
+            // Navigate to target: Parent -> Child(0)
+            AccessibilityNodeInfo targetElement = navigateToPopUp(composeNode);
+            if (targetElement != null) {
+                Log.d(TAG, "Found target element, attempting click...");
+                boolean clickSuccess = performClick(targetElement);
+                if (clickSuccess) {
+                    // Move to next element in the list after successful click
+                    int randomDelay = 1000 + random.nextInt(2000);
+                    handler.postDelayed(() -> {
+                        processViewGroupsWithProbability(viewGroupChildren, currentIndex + 1);
+                    }, randomDelay);
+                }
+            } else {
+                Log.e(TAG, "Could not navigate to target element");
+                helperFunctions.cleanupAndExit("Could not navigate to target element", "error");
+            }
+            composeNode.recycle();
+        } else {
+            Log.e(TAG, "Could not find parent node with ID: " + composeNode);
+            helperFunctions.cleanupAndExit("Could not find parent node in replyPopUp", "error");
+        }
+    }
+    // Method to navigate to the reply pop-up element
+    private AccessibilityNodeInfo navigateToPopUp(AccessibilityNodeInfo parent) {
+        try {
+            Log.d(TAG, "Navigating: Parent -> Child(0) -> Child(0) -> Child(1) -> Child(0)");
+
+            if (parent == null) {
+                Log.e(TAG, "Parent node is null");
+                return null;
+            }
+            // Log parent details for debugging
+            Log.d(TAG, "Parent class: " + parent.getClassName());
+            Log.d(TAG, "Parent child count: " + parent.getChildCount());
+
+            // Step 1: Get first child (0)
+            if (parent.getChildCount() < 1) {
+                Log.e(TAG, "Parent has no children");
+                return null;
+            }
+            AccessibilityNodeInfo firstView = parent.getChild(0);
+            if (firstView == null) {
+                Log.e(TAG, "Could not get child(0)");
+                return null;
+            }
+            // Log target element details
+            Log.d(TAG, "Found Child(0) of Parent:");
+            Log.d(TAG, "Class: " + firstView.getClassName());
+            Log.d(TAG, "Text: " + firstView.getText());
+            Log.d(TAG, "Clickable: " + firstView.isClickable());
+
+            // Step 2: Get first child (0) of firstChild
+            if (firstView.getChildCount() < 1) {
+                Log.e(TAG, "Child(0) has no children");
+                return null;
+            }
+            AccessibilityNodeInfo secondView = firstView.getChild(0);
+            if (secondView == null) {
+                Log.e(TAG, "Could not get child(0) of firstChild");
+                return null;
+            }
+            // Log target element details
+            Log.d(TAG, "Found Child(0) of Parent -> Child(0):");
+            Log.d(TAG, "Class: " + secondView.getClassName());
+            Log.d(TAG, "Text: " + secondView.getText());
+            Log.d(TAG, "Clickable: " + secondView.isClickable());
+            // Step 3: Get second child (1) of firstChild
+            if (secondView.getChildCount() < 2) {
+                Log.e(TAG, "Child(0) has no second child");
+                return null;
+            }
+            AccessibilityNodeInfo scrollView = secondView.getChild(1);
+            if (scrollView == null) {
+                Log.e(TAG, "Could not get child(1) of firstChild");
+                return null;
+            }
+            // Log target element details
+            Log.d(TAG, "Found Child(1) of Parent -> Child(0):");
+            Log.d(TAG, "Class: " + scrollView.getClassName());
+            Log.d(TAG, "Text: " + scrollView.getText());
+            Log.d(TAG, "Clickable: " + scrollView.isClickable());
+            // Step 4: Get first child (0) of thirdChild
+            if (scrollView.getChildCount() < 2) {
+                Log.e(TAG, "Child(1) has no children");
+                return null;
+            }
+            AccessibilityNodeInfo targetElement = scrollView.getChild(3);
+            if (targetElement == null) {
+                Log.e(TAG, "Could not get child(0) of thirdChild");
+                return null;
+            }
+            // Log target element details
+            Log.d(TAG, "Found Child(0) of Parent -> Child(0) -> Child(1):");
+            Log.d(TAG, "Class: " + targetElement.getClassName());
+            Log.d(TAG, "Text: " + targetElement.getText());
+            Log.d(TAG, "Clickable: " + targetElement.isClickable());
+
+            Rect bounds = new Rect();
+            targetElement.getBoundsInScreen(bounds);
+            Log.d(TAG, "Bounds: " + bounds);
+            return targetElement;
+        } catch (Exception e) {
+            Log.e(TAG, "Error navigating to target: " + e.getMessage());
+            return null;
+        }
+    }
     private void typeCommentAndSubmit(int currentIndex, List<AccessibilityNodeInfo> viewGroupChildren) {
         Log.d(TAG, "Starting to type comment...");
 
@@ -467,7 +579,7 @@ public class TweetComments {
         if (currentCommentText != null && !currentCommentText.isEmpty()) {
             Log.d(TAG, "Generating dynamic comment using OpenAI for text: " + currentCommentText);
             // Use OpenAI to generate a dynamic comment
-            openAIClient.generateComment(currentCommentText, new OpenAIClient.OpenAICallback() {
+            openAIClient.generateComment(currentCommentText, commentType, prompt, new OpenAIClient.OpenAICallback() {
                 @Override
                 public void onSuccess(String generatedComment) {
                     Log.d(TAG, "OpenAI generated comment: " + generatedComment);
@@ -519,7 +631,7 @@ public class TweetComments {
         }
     }
     // Method to type text like a human with realistic delays
-    private boolean typeTextLikeHuman(String text, int currentIndex, List<AccessibilityNodeInfo>viewGroupChildren) {
+    private boolean typeTextLikeHuman(String text, int currentIndex, List<AccessibilityNodeInfo> viewGroupChildren) {
         if (text == null || text.isEmpty()) {
             Log.e(TAG, "No text to type");
             return false;
@@ -668,6 +780,18 @@ public class TweetComments {
             Log.d(TAG, "Found tweet button, attempting to click...");
             boolean clickSuccess = performClick(tweetButton);
             if (clickSuccess) {
+                commentCount++;
+                saveCommentCount();
+                Log.d(TAG, "Comment count incremented: " + commentCount);
+                if (commentCount >= comment_limit) {
+                    Log.e(TAG, "You have reached the comment limit");
+                    handler.postDelayed(()->{
+                        helperFunctions.cleanupAndExit("Comment limit reached: " + commentCount + "/" + comment_limit, "error");
+                    }, 1000 + random.nextInt(3000));
+                    tweetButton.recycle();
+                    rootNode.recycle();
+                    return;
+                }
                 Log.d(TAG, "Tweet button clicked successfully. Waiting before continuing to next node...");
                 // Wait for 3 seconds, then continue to next node
                 handler.postDelayed(() -> {
@@ -738,10 +862,7 @@ public class TweetComments {
                     int randomDelay = 2000 + random.nextInt(3000);
                     handler.postDelayed(()->{
                         helperFunctions.performScroll(0.7f,0.3f);
-                        handler.postDelayed(()->{
-                            // Restart the process after scroll
-                            findAndClickComment();
-                        }, randomDelay);
+                        handler.postDelayed(this::findNewPosted, randomDelay);
                     }, randomDelay);
                 }
             } else {
@@ -752,6 +873,32 @@ public class TweetComments {
         } else {
             Log.e(TAG, "Could not find parent node with ID: " + parentNodeId);
             helperFunctions.cleanupAndExit("Could not find parent node", "error");
+        }
+        rootNode.recycle();
+    }
+    public void findNewPosted() {
+        Log.d(TAG, "Searching for posted Button");
+        // Verify one more time that we have root access
+        AccessibilityNodeInfo rootNode = service.getRootInActiveWindow();
+        if (rootNode == null) {
+            Log.e(TAG, "No root node available in like button");
+            helperFunctions.cleanupAndExit("Automation Could not be Completed, because no Root_node present in findPosted", "error");
+            return;
+        }
+        Log.d(TAG, "Root node available, proceeding with Click logic");
+        String nodeId = "com.twitter.android:id/text_banner_layout";
+        AccessibilityNodeInfo targetElement = HelperFunctions.findNodeByResourceId(rootNode, nodeId);
+        if (targetElement != null) {
+            boolean clickSuccess = performClick(targetElement);
+            if (clickSuccess) {
+                Log.d(TAG, "Image Container clicked successfully. Waiting for profile to load...");
+                int randomDelay = 2000 + random.nextInt(5000);
+                handler.postDelayed(()->{
+                    handler.postDelayed(this::findComments, randomDelay);
+                }, randomDelay);
+            }
+        } else {
+            findComments();
         }
         rootNode.recycle();
     }
@@ -806,14 +953,14 @@ public class TweetComments {
                 int clickX = bounds.centerX();
                 int clickY = bounds.centerY();
 
-                if (clickX <= 0 || clickY <= 88) {
-                    Log.d(TAG, "Negative coordinate detected. Performing scroll...");
-                    onScroll();
-                } else {
-                    Log.d(TAG, "Gesture click coordinates: (" + clickX + ", " + clickY + ")");
-                    performGestureClick(clickX, clickY);
-                    clicked = true;
-                }
+                // Optional: clamp to screen to avoid status/nav bars
+                DisplayMetrics dm = context.getResources().getDisplayMetrics();
+                clickX = Math.max(2, Math.min(clickX, dm.widthPixels - 2));
+                clickY = Math.max(2, Math.min(clickY, dm.heightPixels - 2));
+
+                Log.d(TAG, "Gesture click coordinates: (" + clickX + ", " + clickY + ")");
+                clicked = performGestureClick(clickX, clickY); // <-- now real success/failure
+                Log.d(TAG, "Gesture concluded with success=" + clicked);
             }
         } catch (Exception e) {
             Log.e(TAG, "Error clicking target element: " + e.getMessage());
@@ -823,27 +970,48 @@ public class TweetComments {
         }
         return clicked;
     }
-    private void performGestureClick(int x, int y) {
+    private boolean performGestureClick(int x, int y) {
         Log.d(TAG, "Performing gesture click at: " + x + ", " + y);
+
         Path clickPath = new Path();
         clickPath.moveTo(x, y);
+        clickPath.lineTo(x + 1, y + 1);
+
         GestureDescription.Builder gestureBuilder = new GestureDescription.Builder();
-        gestureBuilder.addStroke(new GestureDescription.StrokeDescription(clickPath, 0, 100));
+        gestureBuilder.addStroke(new GestureDescription.StrokeDescription(clickPath, 0, 90));
+
+        CountDownLatch latch = new CountDownLatch(1);
+        AtomicBoolean success = new AtomicBoolean(false);
+
         try {
             MyAccessibilityService service = (MyAccessibilityService) context;
             boolean dispatched = service.dispatchGesture(gestureBuilder.build(), new AccessibilityService.GestureResultCallback() {
                 @Override
                 public void onCompleted(GestureDescription gestureDescription) {
                     Log.d(TAG, "Gesture click completed");
+                    success.set(true);
+                    latch.countDown();
                 }
                 @Override
                 public void onCancelled(GestureDescription gestureDescription) {
                     Log.e(TAG, "Gesture click cancelled");
+                    success.set(false);
+                    latch.countDown();
                 }
             }, null);
             Log.d(TAG, "Gesture click dispatch result: " + dispatched);
+            if (!dispatched) return false;
+            // 🔑 If we're on the main thread, don't block the callback.
+            if (Looper.myLooper() == Looper.getMainLooper()) {
+                Log.d(TAG, "Main thread: skipping await, returning dispatch result");
+                return true; // or 'dispatched'
+            }
+            // Wait (briefly) for the callback to know if it really completed
+            latch.await(2000, TimeUnit.MILLISECONDS); // <= keep short
+            return success.get();
         } catch (Exception e) {
             Log.e(TAG, "Error in gesture click: " + e.getMessage());
+            return false;
         }
     }
     public void onScroll() {
@@ -862,7 +1030,7 @@ public class TweetComments {
             float endY = 0.0f + random.nextFloat() * (0.7f);
             float startY = endY + 0.3f;
             helperFunctions.performScroll(startY, endY);
-            handler.postDelayed(this::findAndClickComment, 1000 + random.nextInt(2000));
+            handler.postDelayed(this::findComments, 1000 + random.nextInt(2000));
         }, 1000 + random.nextInt(2000));
     }
     private AccessibilityNodeInfo findEditableTextField(AccessibilityNodeInfo root) {
@@ -886,5 +1054,12 @@ public class TweetComments {
             }
         }
         return null;
+    }
+    // Helper method to save commentCount
+    private void saveCommentCount() {
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .edit()
+                .putInt(PREF_COMMENT_COUNT, commentCount)
+                .apply();
     }
 }

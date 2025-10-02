@@ -12,6 +12,11 @@ import com.example.appilot.services.MyAccessibilityService;
 import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
+import java.text.SimpleDateFormat;
+import java.util.Date;
+import java.text.ParseException;
+import java.util.Locale;
+import android.util.Log;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -271,6 +276,7 @@ public class CommandHandler {
                             inputListTwitter,
                             durationInt
                     );
+                    Log.e(TAG,"Command: "+inputListTwitter);
                     twitterAutomation.launchApp();
                     break;
                 default:

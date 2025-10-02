@@ -12,6 +12,7 @@ public class OpenAIClient {
     private static final String OPENAI_API_URL = "https://api.openai.com/v1/chat/completions";
     private final OkHttpClient client;
     private final String apiKey;
+    private String prompt;
 
     public OpenAIClient(String apiKey) {
         this.apiKey = apiKey;
@@ -27,11 +28,15 @@ public class OpenAIClient {
         void onError(String error);
     }
 
-    public void generateComment(String originalComment, OpenAICallback callback) {
-        // Create the prompt for generating a relevant comment
-        String prompt = "Generate a short, engaging reply to this Twitter comment (maximum 280 characters, preferably 50-100 characters). " +
-                "Make it sound natural and conversational. Original comment: \"" + originalComment + "\"";
-
+    public void generateComment(String originalComment, String commentType, int promptNum, OpenAICallback callback) {
+        if (promptNum == 1) {
+            // Create the prompt for generating a relevant comment
+            prompt = "Generate a " + commentType + ", short, engaging reply to this Twitter comment (maximum 280 characters, preferably 50-100 characters). " +
+                    "Make it sound natural and conversational. Original comment: \"" + originalComment + "\"";
+        } else if (promptNum == 2) {
+            prompt = "Generate a short, engaging quote tweet (maximum 280 characters, preferably 50-80 characters) in response to the following tweet. " +
+                    "Make it sound natural, conversational, and relevant to the original tweet. Original tweet: \"" + originalComment + "\"";
+        }
         JSONObject requestBody = new JSONObject();
         try {
             requestBody.put("model", "gpt-3.5-turbo");

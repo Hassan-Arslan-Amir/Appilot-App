@@ -35,17 +35,31 @@ public class TwitterAutomation {
     private String Task_id = null;
     private String job_id = null;
     private List<Object> AccountInputs;
+    private JSONArray postedArray;
     private int duration;
     private double probability_like;
     private double probability_follow;
     private double probability_comment;
+    private int limit_like;
+    private int limit_follow;
+    private int limit_comment;
+    private int numberofProfiles;
     private boolean likeTweet;
     private boolean followTweet;
     private boolean commentsOnTweets;
+    private boolean userNameInteract;
+    private boolean spaces;
+    private boolean API;
+    private String dateLike;
+    private String dateFollow;
+    private String dateComment;
+    private String spaceLink;
+    private String API_key;
     private LikeTweets likeTweets;
     private Follow follow;
     private TweetComments tweetComments;
-    private String openAIApiKey = BuildConfig.API_KEY;
+    private InteractionWithUsernames UserNameInteract;
+    private JoinSpaces joinspaces;
     public TwitterAutomation(MyAccessibilityService service, String taskid, String jobid, List<Object> AccountInputs, int duration) {
         this.context = service;
         this.service = service;
@@ -67,8 +81,9 @@ public class TwitterAutomation {
             context.startActivity(intent);
             handler.postDelayed(() -> {
                 Log.d(TAG, "Delay before finding 'For You' tab");
-                findForYou();
-            }, 2000);
+                //clickHome();
+                startAutomation();
+            }, 10000 + random.nextInt(3000));
         } else {
             Log.e(TAG, "Could not launch app: " + TWITTER_PACKAGE);
             launchInstagramExplicitly();
@@ -84,18 +99,55 @@ public class TwitterAutomation {
             context.startActivity(intent);
             handler.postDelayed(() -> {
                 Log.d(TAG, "Delay before finding 'For You' tab after explicit launch");
-                findForYou();
-            }, 2000);
+                //clickHome();
+                startAutomation();
+            }, 10000+ random.nextInt(3000));
 
         } catch (Exception e) {
             Log.e(TAG, "Failed to launch Twitter", e);
             handler.postDelayed(() -> {
                 Log.d(TAG, "Could not launch the Twitter");
                 helperFunctions.cleanupAndExit("Couldn't Launch Twitter", "error");
-            }, 2000);
+            }, 3000+ random.nextInt(2000));
         }
     }
 
+    private void clickHome() {
+        Log.d(TAG, "Starting hierarchy navigation to click target element...");
+
+        AccessibilityNodeInfo rootNode = service.getRootInActiveWindow();
+        if (rootNode == null) {
+            Log.e(TAG, "No root node available");
+            helperFunctions.cleanupAndExit("Automation Could not be Completed, because no Root_node present in clickSearchIcon", "error");
+            return;
+        }
+        // Find parent node by resource ID
+        String parentNodeId = "com.twitter.android:id/tabs";
+        AccessibilityNodeInfo parentNode = HelperFunctions.findNodeByResourceId(rootNode, parentNodeId);
+
+        if (parentNode != null) {
+            Log.d(TAG, "Found parent node with ID: " + parentNodeId);
+            Log.d(TAG, "Parent has " + parentNode.getChildCount() + " children");
+            // Navigate to target: Parent -> Child(0) -> Child(0)
+            AccessibilityNodeInfo targetElement = navigateToHome(parentNode);
+            if (targetElement != null) {
+                Log.d(TAG, "Found target element, attempting click...");
+                boolean clickSuccess = performClick(targetElement);
+                if (clickSuccess) {
+                    Log.d(TAG, "Home Tab clicked successfully. Waiting for home to load...");
+                    int randomDelay = 2000 + random.nextInt(3000);
+                    handler.postDelayed(this::findForYou, randomDelay);
+                }
+            } else {
+                Log.e(TAG, "Could not navigate to target element");
+                helperFunctions.cleanupAndExit("Could not navigate to target element", "error");
+            }
+            parentNode.recycle();
+        } else {
+            Log.e(TAG, "Could not find parent node with ID: " + parentNodeId);
+        }
+        rootNode.recycle();
+    }
     private void findForYou() {
         Log.d(TAG, "Starting hierarchy navigation to click target element...");
         AccessibilityNodeInfo rootNode = service.getRootInActiveWindow();
@@ -146,15 +198,17 @@ public class TwitterAutomation {
         if (targetElement != null) {
             boolean clickSuccess = performClick(targetElement);
             if (clickSuccess) {
-                Log.d(TAG, "Image Container clicked successfully. Waiting for profile to load...");
+                Log.d(TAG, "New posts clicked successfully. Waiting for profile to load...");
                 int randomDelay = 2000 + random.nextInt(5000);
                 handler.postDelayed(()->{
-                    handler.postDelayed(this::startAutomation, randomDelay);
+                    //handler.postDelayed(this::startAutomation, randomDelay);
+                    handler.postDelayed(this::checkAutomationCategory, randomDelay);
                 }, randomDelay);
             }
         }
         else {
-            startAutomation();
+            //startAutomation();
+            checkAutomationCategory();
         }
         rootNode.recycle();
     }
@@ -163,11 +217,6 @@ public class TwitterAutomation {
         Log.d(TAG, "Extracting toggle states from converted JSONArray...");
 
         try {
-            // Initialize variables for TikTok bot features
-            boolean likeTheTweets = false;
-            boolean followTheUsers = false;
-            boolean commnetTheTweet = false;
-
             // Extract toggle states from the input data (already converted from JSONArray)
             if (AccountInputs != null && !AccountInputs.isEmpty()) {
                 Log.d(TAG, "Processing " + AccountInputs.size() + " input objects from converted JSONArray...");
@@ -192,42 +241,101 @@ public class TwitterAutomation {
                                     Log.d(TAG, "Processing Twitter object [" + i + "]: " + connectionObject.toString());
 
                                     // Extract Twitter specific toggles
+                                    if (connectionObject.has("API Key")) {
+                                        API = connectionObject.optBoolean("API Key", false);
+                                        Log.d(TAG, "✓ API Key: " + API);
+
+                                        if (API && connectionObject.has("api_key")) {
+                                            API_key = connectionObject.optString("api_key", "");
+                                            Log.d(TAG, "✓ API Key: " + API_key);
+                                        }
+                                    }
+
                                     if (connectionObject.has("Like the Tweets")) {
                                         likeTweet = connectionObject.optBoolean("Like the Tweets", false);
-                                        Log.d(TAG, "✓ Like the Tweets: " + likeTheTweets);
+                                        Log.d(TAG, "✓ Like the Tweets: " + likeTweet);
 
                                         if (likeTweet && connectionObject.has("probability")) {
                                             int numberOfConnections = connectionObject.optInt("probability", 0);
                                             probability_like = numberOfConnections / 100.0;
                                             Log.d(TAG, "✓ Probability: " + probability_like);
                                         }
+                                        if (likeTweet && connectionObject.has("tweetsPerDay")) {
+                                            limit_like = connectionObject.optInt("tweetsPerDay", 0);
+                                            Log.d(TAG, "✓ tweetsPerDay: " + limit_like);
+                                        }
+                                        if (connectionObject.has("date")) {
+                                            dateLike = connectionObject.optString("date", "");
+                                            Log.d(TAG, "✓ Date for Like the Tweets: " + dateLike);
+                                        }
                                     }
 
                                     if (connectionObject.has("Follow the Users")) {
                                         followTweet = connectionObject.optBoolean("Follow the Users", false);
-                                        Log.d(TAG, "✓ Follow the Users: " + followTheUsers);
+                                        Log.d(TAG, "✓ Follow the Users: " + followTweet);
 
                                         if (followTweet && connectionObject.has("probability")) {
                                             int numberOfConnections = connectionObject.optInt("probability", 0);
                                             probability_follow = numberOfConnections / 100.0;
                                             Log.d(TAG, "✓ Probability: " + probability_follow);
                                         }
+                                        if (followTweet && connectionObject.has("tweetsPerDay")) {
+                                            limit_follow = connectionObject.optInt("tweetsPerDay", 0);
+                                            Log.d(TAG, "✓ tweetsPerDay: " + limit_follow);
+                                        }
+                                        if (connectionObject.has("date")) {
+                                            dateFollow = connectionObject.optString("date", "");
+                                            Log.d(TAG, "✓ Date for Follow the Users: " + dateFollow);
+                                        }
                                     }
-                                    if (connectionObject.has("Comments on Tweets")) {
-                                        commentsOnTweets = connectionObject.optBoolean("Comments on Tweets", false);
-                                        Log.d(TAG, "✓ Comments on Tweets: " + commnetTheTweet);
+
+                                    if (connectionObject.has("Comment on Tweets")) {
+                                        commentsOnTweets = connectionObject.optBoolean("Comment on Tweets", false);
+                                        Log.d(TAG, "✓ Comment on Tweets: " + commentsOnTweets);
 
                                         if (commentsOnTweets && connectionObject.has("probability")) {
                                             int numberOfConnections = connectionObject.optInt("probability", 0);
                                             probability_comment = numberOfConnections / 100.0;
                                             Log.d(TAG, "✓ Probability: " + probability_comment);
                                         }
+                                        if (commentsOnTweets && connectionObject.has("tweetsPerDay")) {
+                                            limit_comment = connectionObject.optInt("tweetsPerDay", 0);
+                                            Log.d(TAG, "✓ tweetsPerDay: " + limit_comment);
+                                        }
+                                        if (connectionObject.has("date")) {
+                                            dateComment = connectionObject.optString("date", "");
+                                            Log.d(TAG, "✓ Date for Comments on Tweets: " + dateComment);
+                                        }
+                                    }
+
+                                    if (connectionObject.has("Profile interaction using Usernames")) {
+                                        userNameInteract = connectionObject.optBoolean("Profile interaction using Usernames", false);
+                                        Log.d(TAG, "✓ Profile interaction using Usernames: " + userNameInteract);
+
+                                        if (userNameInteract && connectionObject.has("posts")) {
+                                            postedArray = connectionObject.optJSONArray("posts");
+                                            Log.d(TAG, "✓ Profiles: " + postedArray);
+                                        }
+                                        if (userNameInteract && connectionObject.has("numberOfPosts")) {
+                                            numberofProfiles = connectionObject.optInt("numberOfPosts", 0);
+                                            Log.d(TAG, "✓ Number of Profiles: " + numberofProfiles);
+                                        }
+                                    }
+
+                                    if (connectionObject.has("Join the Twitter Space")) {
+                                        spaces = connectionObject.optBoolean("Join the Twitter Space", false);
+                                        Log.d(TAG, "✓ Join the Twitter Space: " + spaces);
+
+                                        if (spaces && connectionObject.has("space_link")) {
+                                            spaceLink = connectionObject.optString("space_link", "");
+                                            Log.d(TAG, "✓ Space Link: " + spaceLink);
+                                        }
                                     }
                                 }
                             } else {
                                 Log.e(TAG, "TikTok key found but value is not an array");
                             }
-                            break; // Once Twitter is found, no need to continue further
+                            break;
                         } else {
                             Log.d(TAG, "No 'TikTok' key found in this section.");
                         }
@@ -240,35 +348,59 @@ public class TwitterAutomation {
 
             // Log the final extracted states
             Log.d(TAG, "=== Final Twitter Toggle States ===");
-            Log.d(TAG, "Like the Tweets: " + likeTheTweets);
+            Log.d(TAG, "API Key Provided: " + API);
+            Log.d(TAG, "OpenAI API Key: " + API_key);
+            Log.d(TAG, "Like the Tweets: " + likeTweet);
             Log.d(TAG, "Probability of Liking the Tweets: " + probability_like);
-            Log.d(TAG, "Follow the users: " + followTheUsers);
+            Log.d(TAG, "Daily Limit of Liking Tweets: " + limit_like);
+            Log.d(TAG, "Date for Liking Tweets: " + dateLike);
+            Log.d(TAG, "Follow the users: " + followTweet);
             Log.d(TAG, "Probability of Following the Users: " + probability_follow);
+            Log.d(TAG, "Daily Limit of Following Users: " + limit_follow);
+            Log.d(TAG, "Date for Following Users: " + dateFollow);
             Log.d(TAG, "Comments on Tweets: " + commentsOnTweets);
             Log.d(TAG, "Probability of Commenting on Tweets: " + probability_comment);
+            Log.d(TAG, "Daily Limit of Commenting on Tweets: " + limit_comment);
+            Log.d(TAG, "Date for Commenting on Tweets: " + dateComment);
+            Log.d(TAG, "Interaction with profiles using usernames: " + userNameInteract);
+            Log.d(TAG, "Posted Array: " + postedArray);
+            Log.d(TAG, "Number of Profiles: " + numberofProfiles);
+            Log.d(TAG, "Join the Twitter Space: " + spaces);
+            Log.d(TAG, "Space URL: " + spaceLink);
             Log.d(TAG, "Duration: " + duration);
             Log.d(TAG, "=====================================");
 
             // Create the TikTok automation objects and pass the extracted values
-            this.likeTweets = new LikeTweets(service, Task_id, job_id, AccountInputs, duration, probability_like);
-            this.follow = new Follow(service, Task_id, job_id, AccountInputs, duration, probability_follow);
-            this.tweetComments = new TweetComments(service, Task_id, job_id, AccountInputs, duration, probability_comment, openAIApiKey);
-            // Route to the appropriate function based on toggle states
-            if (likeTweet && !followTweet) {
-                Log.d(TAG, "🎯 Routing to: Like Tweets Only");
-                likeTweets.findAndClickLikeButton();
-
-            } else if (followTweet && !likeTweet) {
-                Log.d(TAG, "🎯 Routing to: Follow Users Only");
-                follow.findTweets();
-
-            } else if (commentsOnTweets) {
-                Log.d(TAG, "🎯 Routing to: Like and Reply to comments");
-                tweetComments.startScrolling();
-
+            this.likeTweets = new LikeTweets(service, Task_id, job_id, AccountInputs, duration, probability_like, limit_like, dateLike);
+            this.follow = new Follow(service, Task_id, job_id, AccountInputs, duration, probability_follow, limit_follow, dateFollow);
+            this.tweetComments = new TweetComments(service, Task_id, job_id, AccountInputs, duration, probability_comment, API_key, limit_comment, dateComment);
+            this.UserNameInteract = new InteractionWithUsernames(service, Task_id, job_id, AccountInputs, duration, postedArray, numberofProfiles, API_key);
+            this.joinspaces = new JoinSpaces(service, Task_id, job_id, AccountInputs, duration, spaceLink);
+//            // Route to the appropriate function based on toggle states
+//            if (API && likeTweet) {
+//                Log.d(TAG, "🎯 Routing to: Like Tweets Only");
+//                likeTweets.startLikeAutomation();
+//            } else if (API && followTweet) {
+//                Log.d(TAG, "🎯 Routing to: Follow Users Only");
+//                follow.startFollowAutomation();
+//            } else if (API && commentsOnTweets) {
+//                Log.d(TAG, "🎯 Routing to: Like and Reply to comments");
+//                tweetComments.startCommentAutomation();
+//            } else if (API && userNameInteract) {
+//                Log.d(TAG, "🎯 Routing to: Interaction with profiles using usernames");
+//                UserNameInteract.startInteractAutomation();
+//            } else if (API && spaces) {
+//                Log.d(TAG, "🎯 Routing to: Joining Twitter Spaces");
+//                joinspaces.startSpaceAutomation();
+//            } else {
+//                Log.d(TAG, "🎯 No automation selected - Using default: ReelLiker");
+//                helperFunctions.cleanupAndExit("Doesn't find any automation", "error");
+//            }
+            if (API && spaces) {
+                Log.d(TAG, "🎯 Routing to: Joining Twitter Spaces");
+                joinspaces.startSpaceAutomation();
             } else {
-                Log.d(TAG, "🎯 No automation selected - Using default: ReelLiker");
-                helperFunctions.cleanupAndExit("Doesn't find any automation", "error");
+                handler.postDelayed(this::clickHome, 3000 + random.nextInt(3000));
             }
 
         } catch (JSONException e) {
@@ -287,6 +419,30 @@ public class TwitterAutomation {
         }
     }
 
+    private void checkAutomationCategory() {
+        Log.d(TAG, "Checking which automation to run based on toggle states...");
+        // Route to the appropriate function based on toggle states
+        if (API && likeTweet) {
+            Log.d(TAG, "🎯 Routing to: Like Tweets Only");
+            likeTweets.startLikeAutomation();
+        } else if (API && followTweet) {
+            Log.d(TAG, "🎯 Routing to: Follow Users Only");
+            follow.startFollowAutomation();
+        } else if (API && commentsOnTweets) {
+            Log.d(TAG, "🎯 Routing to: Like and Reply to comments");
+            tweetComments.startCommentAutomation();
+        } else if (API && userNameInteract) {
+            Log.d(TAG, "🎯 Routing to: Interaction with profiles using usernames");
+            UserNameInteract.startInteractAutomation();
+        } else {
+            Log.d(TAG, "🎯 No automation selected - Using default: ReelLiker");
+            helperFunctions.cleanupAndExit("Doesn't find any automation", "error");
+        }
+    }
+
+
+
+//    Helper Function
     private AccessibilityNodeInfo navigateToForYou(AccessibilityNodeInfo parent) {
         try {
             Log.d(TAG, "Navigating: Parent -> Child(0) -> Child(0) -> Child(0)");
@@ -405,6 +561,59 @@ public class TwitterAutomation {
             Log.d(TAG, "Gesture click dispatch result: " + dispatched);
         } catch (Exception e) {
             Log.e(TAG, "Error in gesture click: " + e.getMessage());
+        }
+    }
+    private AccessibilityNodeInfo navigateToHome(AccessibilityNodeInfo parent) {
+        try {
+            Log.d(TAG, "Navigating: Parent -> Child(0) -> Child(0)");
+
+            if (parent == null) {
+                Log.e(TAG, "Parent node is null");
+                return null;
+            }
+            // Log parent details for debugging
+            Log.d(TAG, "Parent class: " + parent.getClassName());
+            Log.d(TAG, "Parent child count: " + parent.getChildCount());
+
+            // Step 1: Get first child (0)
+            if (parent.getChildCount() < 1) {
+                Log.e(TAG, "Parent has no children");
+                return null;
+            }
+            AccessibilityNodeInfo Child_0 = parent.getChild(0);
+            if (Child_0 == null) {
+                Log.e(TAG, "Could not get child(0)");
+                return null;
+            }
+            // Log target element details
+            Log.d(TAG, "Found target element:");
+            Log.d(TAG, "Class: " + Child_0.getClassName());
+            Log.d(TAG, "Text: " + Child_0.getText());
+            Log.d(TAG, "Clickable: " + Child_0.isClickable());
+
+            // Step 1: Get first child (0)
+            if (Child_0.getChildCount() < 2) {
+                Log.e(TAG, "Child_0 has no children");
+                return null;
+            }
+            AccessibilityNodeInfo targetElement = Child_0.getChild(0);
+            if (targetElement == null) {
+                Log.e(TAG, "Could not get child(1) of Child_0");
+                return null;
+            }
+            // Log target element details
+            Log.d(TAG, "Found target element:");
+            Log.d(TAG, "Class: " + targetElement.getClassName());
+            Log.d(TAG, "Text: " + targetElement.getText());
+            Log.d(TAG, "Clickable: " + targetElement.isClickable());
+
+            Rect bounds = new Rect();
+            targetElement.getBoundsInScreen(bounds);
+            Log.d(TAG, "Bounds: " + bounds);
+            return targetElement;
+        } catch (Exception e) {
+            Log.e(TAG, "Error navigating to target: " + e.getMessage());
+            return null;
         }
     }
 }

@@ -75,7 +75,7 @@ public class DeviceRegistrationManager {
                 registrationBody.put("activationDate", activationDate);
                 registrationBody.put("email", email);
                 JSONArray botNameArray = new JSONArray();
-                botNameArray.put("reddit");
+                botNameArray.put("X (formerly Twitter) Bot");
                 registrationBody.put("botName", botNameArray);
 
                 // Prepare the registration request
